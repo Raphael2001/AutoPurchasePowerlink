@@ -50,7 +50,7 @@ def get_client_details(account_id):
     return json.loads(response.content)
 
 
-def create_purchase(product, seller, outside_selling_value, doc_number):
+def create_purchase(product, seller, outside_selling_value, doc_number, agent):
     url = POWER_LINK_URL + "record/33"
     payload = {
         "productid": product.product_id,
@@ -64,6 +64,8 @@ def create_purchase(product, seller, outside_selling_value, doc_number):
         "pcfseller": seller,  # מוכר
         "pcfsystemfield89": outside_selling_value  # מכירות חול
     }
+    if agent:
+        payload["pcfsystemfield110"] = agent  # סוכן
     response = requests.post(url=url, data=json.dumps(payload), headers=HEADERS)
     return json.loads(response.content)
 
@@ -79,16 +81,26 @@ def update_client(doc_number, account_id):
     return json.loads(response.content)
 
 
-def get_seller_by_originating_lead_code(originating_lead_code):
-    if originating_lead_code is None:
-        return "3"  # הומאוטריט לאב
-    originating_lead_code = int(originating_lead_code)
-    if originating_lead_code == 23:
-        return "2"  # פילץ
-    elif originating_lead_code == 22:
+def get_seller_by_customer_owner(customer_owner):
+    if customer_owner == 2:
         return "1"  # מוריס
+    return "3"  # הומאוטריט לאב
+
+
+def get_agent_by_originating_lead_code(originating_lead_code):
+    if originating_lead_code is None:
+        return None
+    originating_lead_code = int(originating_lead_code)
+    if originating_lead_code == 26:  # לקוחות אורנית
+        return "9ddf1077-6c1e-444c-a71b-9c911b23810f"
+    elif originating_lead_code == 16:  # מטפלת ליאורה אפשטיין
+        return "b1bc99fb-24c4-4981-9ec1-7cb8a8f645ee"
+    elif originating_lead_code == 23:  # פילץ
+        return "0d98229c-ec80-4a8f-9b6c-31f293e14246"
+    elif originating_lead_code == 41:  # מונק
+        return "d8b1762d-a856-493d-b40e-43f3c7638350"
     else:
-        return "3"  # הומאוטריט לאב
+        return None
 
 
 class Purchase(Resource):
@@ -110,7 +122,6 @@ class Purchase(Resource):
 
         for product_data in data_array:
             if product_data["documenttypecode"] == 84:
-                print(product_data)
                 product_id = product_data["productid"]
                 account_id = product_data["accountid"]
                 item_total_price = product_data["itemtotalprice"]
@@ -120,11 +131,12 @@ class Purchase(Resource):
                 date = date.rsplit('T')[0]
 
                 product = Product(product_id, account_id, item_total_price, quantity, date, description, divide_tax_by)
-                print(product)
                 client = get_client_details(account_id)
-                originatingleadcode = client['data']['Record']["originatingleadcode"]
-                seller = get_seller_by_originating_lead_code(originatingleadcode)
-                create_purchase(product, seller, outside_selling, self.document_number)
+                customer_owner = client['data']['Record']["pcfcustomerowner"]
+                originating_lead_code = client['data']['Record']["originatingleadcode"]
+                seller = get_seller_by_customer_owner(customer_owner)
+                agent = get_agent_by_originating_lead_code(originating_lead_code)
+                create_purchase(product, seller, outside_selling, self.document_number, agent)
                 update_client(self.document_number, account_id)
 
     def post(self):
@@ -169,5 +181,4 @@ class Product:
 api.add_resource(Purchase, '/api/v1/purchase')
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
+    app.run(debug=True, ssl_context='adhoc', host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
