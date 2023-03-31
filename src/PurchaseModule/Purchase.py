@@ -1,85 +1,7 @@
-import json
-import os
-import requests
-from flask import Flask
-from flask_cors import CORS
-from flask_restful import Resource, Api, reqparse
+from flask_restful import Resource, reqparse
 
-app = Flask(__name__)
-api = Api(app)
-CORS(app)
-
-app.config['CORS_HEADERS'] = 'Content-Type; utf-8'
-app.config['Access-Control-Allow-Origin'] = '*'
-
-POWER_LINK_URL = "https://api.powerlink.co.il/api/"
-POWER_LINK_TOKEN = "2d2844c9-d94f-416d-898e-cbc30ddaf6b2"
-TAX_RATE = 1.17
-
-HEADERS = {"Content-type": "application/json",
-           "tokenid": POWER_LINK_TOKEN}
-
-drop_down_list_representative = {
-    10: "רפאל",
-    2: "מוריס",
-    1: "מארק",
-    9: "ניצה חנה מטילד",
-    8: "ז׳רמי",
-    11: "פילץ",
-}
-
-
-def get_documents(document_number):
-    url = POWER_LINK_URL + "query"
-
-    payload = {
-        "objecttype": 90,
-        "page_size": 50,
-        "page_number": 1,
-        "fields": "*",
-        "query": f"(documentnumber = {document_number})"
-    }
-    response = requests.post(url=url, data=json.dumps(payload), headers=HEADERS)
-    return json.loads(response.content)["data"]["Data"]
-
-
-def get_client_details(account_id):
-    # get client details from powerlink by account id
-    url = POWER_LINK_URL + f"record/1/{account_id}"
-    response = requests.get(url=url, headers=HEADERS)
-    return json.loads(response.content)
-
-
-def create_purchase(product, seller, outside_selling_value, doc_number, agent):
-    url = POWER_LINK_URL + "record/33"
-    payload = {
-        "productid": product.product_id,
-        "accountid": product.account_id,
-        "quantity": product.quantity,
-        "price": product.item_price,
-        "description": product.description,
-
-        "pcforderid": doc_number,  # מספר הזמנה
-        "pcfpurchasedate": product.date,  # תאריך קנייה
-        "pcfseller": seller,  # מוכר
-        "pcfsystemfield89": outside_selling_value  # מכירות חול
-    }
-    if agent:
-        payload["pcfsystemfield110"] = agent  # סוכן
-    response = requests.post(url=url, data=json.dumps(payload), headers=HEADERS)
-    return json.loads(response.content)
-
-
-def update_client(doc_number, account_id):
-    url = POWER_LINK_URL + f"record/account/{account_id}"
-
-    payload = {
-        "pcflastorderid": str(doc_number)
-    }
-
-    response = requests.put(url=url, data=json.dumps(payload), headers=HEADERS)
-    return json.loads(response.content)
-
+from src.Main.helpers import PowerLinkApi, add_api_log
+from src.Constas import TAX_RATE
 
 def get_seller_by_customer_owner(customer_owner):
     if customer_owner == 2:
@@ -108,9 +30,12 @@ class Purchase(Resource):
     def __init__(self):
         self.document_number = ""
         self.tax_value = ""
+        self.power_link: PowerLinkApi = None
 
     def create_purchases(self):
-        data_array = get_documents(self.document_number)
+        data_array = self.power_link.get_documents()
+        if not data_array:
+            return False
 
         if int(float(self.tax_value)) > 0:
             divide_tax_by = 1
@@ -131,17 +56,23 @@ class Purchase(Resource):
                 date = date.rsplit('T')[0]
 
                 product = Product(product_id, account_id, item_total_price, quantity, date, description, divide_tax_by)
-                client = get_client_details(account_id)
+                client = self.power_link.get_client_details(account_id)
+                if not client:
+                    return False
+
                 customer_owner = client['data']['Record']["pcfcustomerowner"]
                 originating_lead_code = client['data']['Record']["originatingleadcode"]
                 seller = get_seller_by_customer_owner(customer_owner)
                 agent = get_agent_by_originating_lead_code(originating_lead_code)
-                create_purchase(product, seller, outside_selling, self.document_number, agent)
-                update_client(self.document_number, account_id)
+                purchase_data = self.power_link.create_purchase(product, seller, outside_selling, agent)
+                client_data = self.power_link.update_client(account_id)
+
+                if purchase_data is False or client_data is False:
+                    return False
+
+        return True
 
     def post(self):
-        global POWER_LINK_TOKEN
-        global HEADERS
         parser = reqparse.RequestParser()
         parser.add_argument('documentnumber', required=True, location='json',
                             help="documentnumber is missing")
@@ -149,18 +80,27 @@ class Purchase(Resource):
                             help="token is missing")
         parser.add_argument('taxvalue', required=True, location='json',
                             help="taxvalue is missing")
-        # add args
         args = parser.parse_args()
+        # add args
         self.document_number = args["documentnumber"]
+        add_api_log(args, "Api - Purchase", document_number=self.document_number)
+
         self.tax_value = args['taxvalue']
-        POWER_LINK_TOKEN = args["token"]
-        HEADERS["tokenid"] = POWER_LINK_TOKEN
-        self.create_purchases()
-        return {
-            'statuscode': 200,
-            'body': POWER_LINK_TOKEN,
-            'message': "",
-        }
+
+        self.power_link = PowerLinkApi(args["token"], self.document_number)
+        response = self.create_purchases()
+        if response:
+            return {
+                'statuscode': 200,
+                'body': {},
+                'message': "",
+            }
+        else:
+            return {
+                'statuscode': 200,
+                'body': {},
+                'message': "problem with the request",
+            }
 
 
 class Product:
@@ -176,9 +116,3 @@ class Product:
     def __str__(self):
         return f"The product id is {self.product_id} and the account id is {self.account_id}, the quantity is " \
                f"{self.quantity} and the total price is {self.item_price}, created on {self.date}"
-
-
-api.add_resource(Purchase, '/api/v1/purchase')
-
-if __name__ == '__main__':
-    app.run(debug=True, ssl_context='adhoc', host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
