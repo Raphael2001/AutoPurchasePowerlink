@@ -1,3 +1,5 @@
+from zoneinfo import reset_tzpath
+
 from flask_restful import Resource, reqparse
 
 from src.Main.helpers import PowerLinkApi, add_api_log
@@ -10,19 +12,28 @@ def get_seller_by_customer_owner(customer_owner):
 
 
 def get_agent_by_originating_lead_code(originating_lead_code):
-    if originating_lead_code is None:
+    if not originating_lead_code:
         return None
-    originating_lead_code = int(originating_lead_code)
-    if originating_lead_code == 26:  # לקוחות אורנית
-        return "9ddf1077-6c1e-444c-a71b-9c911b23810f"
-    elif originating_lead_code == 16:  # מטפלת ליאורה אפשטיין
-        return "b1bc99fb-24c4-4981-9ec1-7cb8a8f645ee"
-    elif originating_lead_code == 23:  # פילץ
-        return "0d98229c-ec80-4a8f-9b6c-31f293e14246"
-    elif originating_lead_code == 41:  # מונק
-        return "d8b1762d-a856-493d-b40e-43f3c7638350"
-    else:
+
+    try:
+        originating_lead_code = int(originating_lead_code)
+    except ValueError:
         return None
+
+    match originating_lead_code:
+        case 26:  # לקוחות אורנית
+            return "9ddf1077-6c1e-444c-a71b-9c911b23810f"
+        case 16:  # מטפלת ליאורה אפשטיין
+            return "b1bc99fb-24c4-4981-9ec1-7cb8a8f645ee"
+        case 23:  # פילץ
+            return "0d98229c-ec80-4a8f-9b6c-31f293e14246"
+        case 41:  # מונק
+            return "d8b1762d-a856-493d-b40e-43f3c7638350"
+        case 57 | 54 | 55 | 56:  #אילן
+            return "cc289fae-f090-4803-b313-11dafe526410"
+        case _:
+            return None
+
 
 
 class Purchase(Resource):
